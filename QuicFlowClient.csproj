@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <EnablePreviewFeatures>True</EnablePreviewFeatures>
+    <NoWarn>$(NoWarn);CA2252</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Models\" />
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.0.6" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.0.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.6" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.0.6" />
+    <!-- ReactiveUI.Fody is often used but sticking to basic ReactiveUI for simplicity in manual generation -->
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.0.6" />
+  </ItemGroup>
+
+  <!-- Automatically copy libmsquic.dylib to the output directory for macOS dev -->
+  <Target Name="CopyNativeQuicLibrary" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <Copy SourceFiles="/opt/homebrew/lib/libmsquic.dylib" DestinationFolder="$(OutDir)" ContinueOnError="true" />
+  </Target>
+</Project>
