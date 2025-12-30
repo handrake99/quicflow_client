@@ -1,16 +1,25 @@
 using System;
+using System.Buffers;
+using System.Buffers.Binary;
+using System.IO;
 using System.Net;
 using System.Net.Quic;
 using System.Net.Security;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using QuicFlowClient.Models;
 
 namespace QuicFlowClient.Services
 {
     public class QuicClientService
     {
+        // 보안을 위한 최대 메시지 크기 제한 (예: 1MB)
+        // C++ 서버의 MAX_MESSAGE_SIZE와 맞춰주세요.
+        private const int MAX_MESSAGE_SIZE = 1024 * 1024;
+            
         private QuicConnection? _connection;
         private QuicStream? _chatStream;
         private CancellationTokenSource? _cts;
@@ -90,22 +99,12 @@ namespace QuicFlowClient.Services
                 // Open a bidirectional stream for chat
                 _chatStream = await _connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, _cts.Token);
                 Log("Chat stream opened.");
+                
+                await SendMessageAsync("Hello I'm User_1");
 
                 // Start reading loop
                 _ = ReadLoopAsync(_chatStream, _cts.Token);
 
-                // Send Test Message
-                var myMessage = new {
-                    Type = "Login",
-                    UserID = "User_1",
-                    Message = "Hello I'm User_1",
-                    Timestamp = DateTime.UtcNow
-                };
-
-                var jsonMessage = System.Text.Json.JsonSerializer.Serialize(myMessage);
-                
-                await SendMessageAsync(jsonMessage);
-                Log($"Sent test message: {jsonMessage}");
             }
             catch (Exception ex)
             {
@@ -121,16 +120,14 @@ namespace QuicFlowClient.Services
                 Log("Error: Not connected or stream not open.");
                 return;
             }
-
+            
+            // Send Test Message
+            var myMessage = new ChatData("chat", 0, "User_1", message); 
             try
             {
-                byte[] buffer = Encoding.UTF8.GetBytes(message);
-                await _chatStream.WriteAsync(buffer, _cts?.Token ?? CancellationToken.None);
-                // Depending on protocol framing, might need to send connection end or length prefix. 
-                // For this simple test, we assume raw stream or handling by checking Read behavior.
-                // However, TCP/QUIC is stream based. For a simple chat, usually we delimit messages.
-                // Let's assume newline delimiter for this simple client.
-                await _chatStream.WriteAsync(Encoding.UTF8.GetBytes("\n"), _cts?.Token ?? CancellationToken.None);
+                var jsonMessage = JsonSerializer.Serialize(myMessage);
+                
+                await SendMessageAsync(_chatStream, jsonMessage);
             }
             catch (Exception ex)
             {
@@ -171,18 +168,29 @@ namespace QuicFlowClient.Services
         {
             try
             {
-                byte[] buffer = new byte[1024];
-                while (!token.IsCancellationRequested)
+                while (true)
                 {
-                    int read = await stream.ReadAsync(buffer, token);
-                    if (read == 0)
+                    try 
                     {
-                        Log("Server closed the stream.");
+                        string? msg = await ReadMessageAsync(stream);
+        
+                        if (msg == null) 
+                        {
+                            Console.WriteLine("Server disconnected.");
+                            break; 
+                        }
+
+                        Console.WriteLine($"[Recv] {msg}");
+        
+                        // 받은 메시지가 JSON이라면 여기서 파싱
+                        OnMessage(msg);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error: {ex.Message}");
                         break;
                     }
-
-                    string message = Encoding.UTF8.GetString(buffer, 0, read);
-                    OnMessageReceived?.Invoke(message);
+                    
                 }
             }
             catch (OperationCanceledException)
@@ -199,9 +207,150 @@ namespace QuicFlowClient.Services
             }
         }
 
+        private void OnMessage(string jsonMessage)
+        {
+            if (jsonMessage.Length < 4)
+            {
+                // not enough data
+                return;
+            }
+            
+            var chatData = JsonSerializer.Deserialize<ChatData>(jsonMessage);
+            OnMessageReceived?.Invoke(chatData.Message);
+        }
+
         private void Log(string message)
         {
             OnLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] {message}");
         }
+        
+    /// <summary>
+    /// [쓰기] 메시지를 길이(4byte) + 본문 형태로 변환하여 전송합니다.
+    /// </summary>
+    private static async Task SendMessageAsync(QuicStream stream, string message)
+    {
+        // 1. 문자열을 바이트로 변환
+        byte[] bodyBytes = Encoding.UTF8.GetBytes(message);
+        int bodyLength = bodyBytes.Length;
+
+        // 2. 헤더(길이) 생성 (4바이트, Little Endian)
+        byte[] headerBytes = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(headerBytes, bodyLength);
+
+        byte[] combined = [..headerBytes, ..bodyBytes];
+
+        // 3. 전송 (헤더 -> 본문 순서)
+        // 따로 보내도 되지만, 하나의 패킷으로 뭉쳐 보내는 것이 성능상 유리할 수 있음
+        // 여기서는 명확성을 위해 순차 전송
+        await stream.WriteAsync(combined);
+        //await stream.WriteAsync(bodyBytes);
+        
+        // 필요하다면 즉시 전송 강제 (QUIC은 보통 알아서 잘 보냄)
+        // await stream.FlushAsync(); 
+        
+        Console.WriteLine($"[Send] Length: {bodyLength} | Msg: {message}");
+    }
+
+    /// <summary>
+    /// [읽기] 스트림에서 4바이트 길이를 먼저 읽고, 그만큼의 본문을 읽어 문자열로 반환합니다.
+    /// </summary>
+    /// <returns>읽은 메시지 (스트림이 끊겼으면 null 반환)</returns>
+    public static async Task<string?> ReadMessageAsync(QuicStream stream)
+    {
+        // 1. 헤더 읽기 (4바이트)
+        byte[] headerBuffer = new byte[4];
+        bool headerReadSuccess = await ReadExactlyAsync(stream, headerBuffer, 4);
+        
+        if (!headerReadSuccess) return null; // 스트림이 닫힘
+
+        // 2. 길이 파싱 (Little Endian)
+        int bodyLength = BinaryPrimitives.ReadInt32LittleEndian(headerBuffer);
+        Console.WriteLine($"Read header from Stream : {bodyLength}");
+
+        // [검증] 메시지 크기가 비정상적으로 크거나 음수인지 체크
+        if (bodyLength < 0 || bodyLength > MAX_MESSAGE_SIZE)
+        {
+            throw new InvalidDataException($"Message size invalid or too large: {bodyLength}");
+        }
+
+        if (bodyLength == 0) return string.Empty; // 빈 메시지 처리
+
+        // 3. 본문 읽기 (bodyLength 만큼)
+        byte[] bodyBuffer = new byte[bodyLength];
+        bool bodyReadSuccess = await ReadExactlyAsync(stream, bodyBuffer, bodyLength);
+
+        if (!bodyReadSuccess)
+        {
+            // 헤더는 왔는데 본문이 오다가 끊긴 경우 (에러 처리)
+            throw new EndOfStreamException("Stream closed while reading message body.");
+        }
+
+        // 4. 문자열 변환
+        return Encoding.UTF8.GetString(bodyBuffer);
+    }
+
+    /// <summary>
+    /// [핵심] 원하는 바이트 수만큼 꽉 채워서 읽을 때까지 반복하는 헬퍼 함수
+    /// </summary>
+    private static async Task<bool> ReadExactlyAsync(QuicStream stream, byte[] buffer, int count)
+    {
+        int totalBytesRead = 0;
+        
+        while (totalBytesRead < count)
+        {
+            // 남은 만큼만 읽기 시도
+            int bytesRead = await stream.ReadAsync(buffer.AsMemory(totalBytesRead, count - totalBytesRead));
+            
+            if (bytesRead == 0)
+            {
+                // 더 이상 읽을 데이터가 없음 (상대방이 연결 끊음)
+                return false; 
+            }
+            
+            totalBytesRead += bytesRead;
+        }
+        /*Console.WriteLine("[DEBUG] 🕵️ Raw Byte Inspection Started...");
+        byte[] debugBuffer = new byte[1024]; // 넉넉하게 잡음
+
+        try
+        {
+            while (true)
+            {
+                // 1. 읽기 시도 (크기 지정 없이 오는 대로 다 받음)
+                int bytesRead = await stream.ReadAsync(debugBuffer);
+            
+                // 2. 연결 종료 체크
+                if (bytesRead == 0)
+                {
+                    Console.WriteLine("[DEBUG] ❌ Stream Closed (EOF) by Server.");
+                    break;
+                }
+
+                // 3. 받은 데이터 분석 출력
+                Console.WriteLine($"[DEBUG] 📥 Received Packet! Size: {bytesRead} bytes");
+                Console.Write($"[HEX] ");
+            
+                for (int i = 0; i < bytesRead; i++)
+                {
+                    // 보기 좋게 00 0A FF 형태로 출력
+                    Console.Write($"{debugBuffer[i]:X2} "); 
+                }
+                Console.WriteLine(); // 줄바꿈
+            
+                // 4. 아스키 문자열로도 찍어보기 (혹시 에러 메시지가 텍스트로 왔는지 확인)
+                string asciiView = Encoding.ASCII.GetString(debugBuffer, 0, bytesRead);
+                // 제어 문자(0) 등은 점(.)으로 치환해서 출력
+                //string safeAscii = new string(asciiView.Select(c => char.IsControl(c) ? '.' : c).ToArray());
+                Console.WriteLine($"[STR] {asciiView}");
+                Console.WriteLine("------------------------------------------------");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] 💥 Error: {ex.Message}");
+        }*/
+
+        return true; // 목표량을 다 채움
+    }
     }
 }
