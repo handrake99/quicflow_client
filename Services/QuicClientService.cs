@@ -24,7 +24,7 @@ namespace QuicFlowClient.Services
         private QuicStream? _chatStream;
         private CancellationTokenSource? _cts;
 
-        public event Action<string>? OnMessageReceived;
+        public event Action<ChatData>? OnMessageReceived;
         public event Action<string>? OnLog;
         public event Action? OnConnectionLost;
 
@@ -70,7 +70,6 @@ namespace QuicFlowClient.Services
                 
                 var clientConnectionOptions = new QuicClientConnectionOptions
                 {
-                    //RemoteEndPoint = new IPEndPoint(IPAddress.Parse(host), port),
                     RemoteEndPoint = new IPEndPoint(IPAddress.Parse(host), port),
                     
                     ClientAuthenticationOptions = new SslClientAuthenticationOptions
@@ -85,10 +84,9 @@ namespace QuicFlowClient.Services
                         RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true
                     },
                     MaxInboundBidirectionalStreams = 10,
-                    //DefaultStreamErrorCode = 0x101, // Protocol specific error code
-                    //DefaultCloseErrorCode = 0x200 // Protocol specific error code
                     DefaultStreamErrorCode = 0, // Protocol specific error code
-                    DefaultCloseErrorCode = 0 // Protocol specific error code
+                    DefaultCloseErrorCode = 0, // Protocol specific error code
+                    IdleTimeout = TimeSpan.FromHours(1) // 안전장치로 길게 잡아둠
                 };
 
                 _connection = await QuicConnection.ConnectAsync(clientConnectionOptions);
@@ -216,7 +214,7 @@ namespace QuicFlowClient.Services
             }
             
             var chatData = JsonSerializer.Deserialize<ChatData>(jsonMessage);
-            OnMessageReceived?.Invoke(chatData.Message);
+            OnMessageReceived?.Invoke(chatData);
         }
 
         private void Log(string message)

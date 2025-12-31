@@ -21,14 +21,7 @@
                 <TextBlock Text="Port:" VerticalAlignment="Center"/>
                 <TextBox Text="{Binding ServerPort}" Width="80" Watermark="Port"/>
                 
-                <Button Command="{Binding ToggleConnectionCommand}" 
-                        Content="{Binding IsConnected, Converter={x:Static ObjectConverters.IsNull}}"
-                        >
-                    <Panel>
-                        <TextBlock Text="Connect" IsVisible="{Binding !IsConnected}"/>
-                        <TextBlock Text="Disconnect" IsVisible="{Binding IsConnected}"/>
-                    </Panel>
-                </Button>
+                <Button Command="{Binding ToggleConnectionCommand}" Content="{Binding ConnectionButtonText}" Width="100" HorizontalContentAlignment="Center"/>
                 
                 <TextBlock Text="Status:" VerticalAlignment="Center" Margin="20,0,0,0"/>
                 <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="3" Padding="5,2">
@@ -49,7 +42,10 @@
                     <ListBox ItemsSource="{Binding ChatMessages}">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                    <TextBlock Text="{Binding UserID, StringFormat='[{0}]'}" FontWeight="Bold" Foreground="CornflowerBlue"/>
+                                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+                                </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>

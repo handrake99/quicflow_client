@@ -6,6 +6,7 @@ using QuicFlowClient.Services;
 using System;
 using System.Threading.Tasks;
 using System.Reactive.Concurrency;
+using QuicFlowClient.Models;
 
 namespace QuicFlowClient.ViewModels
 {
@@ -31,7 +32,18 @@ namespace QuicFlowClient.ViewModels
         public bool IsConnected
         {
             get => _isConnected;
-            set => this.RaiseAndSetIfChanged(ref _isConnected, value);
+            set 
+            {
+                this.RaiseAndSetIfChanged(ref _isConnected, value);
+                ConnectionButtonText = value ? "Disconnect" : "Connect";
+            }
+        }
+
+        private string _connectionButtonText = "Connect";
+        public string ConnectionButtonText
+        {
+            get => _connectionButtonText;
+            set => this.RaiseAndSetIfChanged(ref _connectionButtonText, value);
         }
 
         private string _connectionStatus = "Disconnected";
@@ -49,7 +61,7 @@ namespace QuicFlowClient.ViewModels
         }
         
         // Using ObservableCollection for UI binding
-        public ObservableCollection<string> ChatMessages { get; } = new ObservableCollection<string>();
+        public ObservableCollection<ChatData> ChatMessages { get; } = new ObservableCollection<ChatData>();
         // Using string for Logs to append easily as a big block, or ObservableCollection?
         // User asked for "Text Box", so typically a single string block is easier if we just append, 
         // but for performance with many logs, ObservableCollection with ItemTemplate is better.
@@ -82,11 +94,11 @@ namespace QuicFlowClient.ViewModels
                 });
             };
             
-            _quicService.OnMessageReceived += msg => 
+            _quicService.OnMessageReceived += chatData => 
             {
-                RxApp.MainThreadScheduler.Schedule(() => 
+                RxApp.MainThreadScheduler.Schedule(() =>
                 {
-                    ChatMessages.Add($"Server: {msg}");
+                    ChatMessages.Add(chatData);
                 });
             };
 
@@ -140,7 +152,7 @@ namespace QuicFlowClient.ViewModels
                 {
                     string msg = InputMessage;
                     InputMessage = ""; // Clear input
-                    ChatMessages.Add($"Me: {msg}");
+                    //ChatMessages.Add(new ChatData("chat", 0, "Me", msg));
                     await _quicService.SendMessageAsync(msg);
                 }
             }, canSend);
